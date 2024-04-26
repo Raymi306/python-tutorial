@@ -1,44 +1,28 @@
-"""Module for building and build-time QA of the python tutorial website"""
-import argparse
+"""Module for building and build-time QA of the python tutorial codeblocks"""
+import inspect
+import json
 from os import makedirs
-from pathlib import Path
 import sys
 
-from jinja2 import Environment, PackageLoader, DebugUndefined
-from markdown import markdown
-from markdown.extensions.toc import TocExtension
-from markdown.extensions.codehilite import CodeHiliteExtension
+from app.codeblocks import get_func_body
+from app.pages import first_steps, first_projects, variables, classes, error_handling
+from app.qa import CodeblocksTester, BuildTestFailure
 
-from app import config
-from app.templates import TEMPLATES, BASE_HTML
-from app.templates.codeblocks import codeblocks
-from app.templates.links import links
-from app.qa import (
-    LinkTester, CodeblocksTester, UnresolvedTemplateVariablesTester, BuildTestFailure
+
+PAGE_MODULES = (
+     first_steps,
+     first_projects,
+     variables,
+     classes,
+     error_handling,
 )
 
-parser = argparse.ArgumentParser()
-parser.add_argument(
-    '--dry-run',
-    action="store_true",
-    help="""
-    Do not write any files or directories.
-    Still perform network requests for link checks
-    """
-)
-parser.add_argument(
-    '--warn-links',
-    action="store_true",
-    help="Do not error on link checker failures",
-)
+OUTPUT_DIR = "dist"
 
-def run_build_checks(env, ctx, args):
+
+def run_build_checks():
     """QA for build process"""
-    testers = (
-            LinkTester(warn=args.warn_links),
-            CodeblocksTester(),
-            UnresolvedTemplateVariablesTester(env, ctx),
-            )
+    testers = (CodeblocksTester(PAGE_MODULES),)
     fail = False
     for tester in testers:
         try:
@@ -49,53 +33,25 @@ def run_build_checks(env, ctx, args):
         sys.exit(1)
 
 
-def render_templates(env, ctx):
+def main():
     """
-    Generator
-    Render templates in correct order to produce a final render
+    Perform all of the actions necessary to output the python tutorial codeblocks
     """
-    py_md_extensions = (
-            'attr_list',
-            'fenced_code',
-            CodeHiliteExtension(guess_lang=False),
-            TocExtension(toc_depth='2-6', anchorlink=True),
-            )
-    base_html_template = env.get_template(BASE_HTML)
-
-    for name in TEMPLATES:
-        template = env.get_template(name)
-        html = markdown(
-                template.render(ctx),
-                extensions=py_md_extensions
-                )
-        final_render = base_html_template.render({'body_content': html})
-        path = Path(config['DIST_PATH'], Path(name).stem).with_suffix('.html')
-        yield final_render, path
-
-
-def write_render(render, path):
-    """Write final render to appropriate path"""
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(render)
-
-
-def main(args):
-    """
-    Perform all of the actions necessary to output the python tutorial webpages
-    """
-    env = Environment(
-            loader=PackageLoader('app'),
-            autoescape=False,
-            undefined=DebugUndefined,
-            )
-    ctx = {**codeblocks, **links}
-    run_build_checks(env, ctx, args)
-    if not args.dry_run:
-        makedirs('dist', exist_ok=True)
-        for render, path in render_templates(env, ctx):
-            write_render(render, path)
+    print()
+    run_build_checks()
+    print()
+    makedirs(OUTPUT_DIR, exist_ok=True)
+    with open(f'{OUTPUT_DIR}/codeblocks.json', 'w', encoding='utf-8') as f:
+        codeblock_map = {}
+        for module in PAGE_MODULES:
+            nonlocals = getattr(module, "NONLOCALS", ())
+            print(f"extracting from {module.__name__}:")
+            for member_name, member in inspect.getmembers(module, inspect.isfunction):
+                if member_name not in nonlocals:
+                    print("    ", member_name)
+                    codeblock_map[member_name] = get_func_body(member)
+        json.dump(codeblock_map, f)
 
 
 if __name__ == '__main__':
-    args_ = parser.parse_args()
-    main(args_)
+    main()
